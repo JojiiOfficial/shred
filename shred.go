@@ -22,13 +22,13 @@ type ShredderConf struct {
 }
 
 // WriteOptions options how to shred
-type WriteOptions uint8
+type WriteOptions int
 
 // Available write options
 const (
-	WriteZeros WriteOptions = iota
+	NoWrite WriteOptions = 1 << iota
+	WriteZeros
 	WriteRand
-	WriteRandSecure
 )
 
 // NewShredderConf create a new shredder
@@ -75,7 +75,10 @@ func (shredderConf *ShredderConf) Dir(path string) error {
 
 		if !stats.IsDir() {
 			shredderConf.Shredder.wg.Add(1)
-			go shredderConf.ShredFile(path)
+			go (func() {
+				shredderConf.ShredFile(path)
+				shredderConf.Shredder.wg.Done()
+			})()
 			shredderConf.Shredder.wg.Wait()
 		}
 		return nil
@@ -92,9 +95,9 @@ func (shredderConf *ShredderConf) ShredFile(path string) error {
 	}
 	size := fileinfo.Size()
 
-	// Write secure rand
-	if shredderConf.WriteOptions&WriteRandSecure == WriteRandSecure {
-		err = shredderConf.WriteRandomSecure(path, size)
+	if shredderConf.WriteOptions&WriteRand == WriteRand {
+		// Write rand
+		err = shredderConf.WriteRandom(path, size)
 		if err != nil {
 			return err
 		}
@@ -116,12 +119,11 @@ func (shredderConf *ShredderConf) ShredFile(path string) error {
 		}
 	}
 
-	shredderConf.Shredder.wg.Done()
 	return nil
 }
 
-// WriteRandomSecure overwrites a File with random stuff.
-func (shredderConf *ShredderConf) WriteRandomSecure(file string, size int64) error {
+// WriteRandom overwrites a File with random stuff.
+func (shredderConf *ShredderConf) WriteRandom(file string, size int64) error {
 	// Do n times. Specified in conf
 	for i := 0; i < shredderConf.Times; i++ {
 		// Open file
