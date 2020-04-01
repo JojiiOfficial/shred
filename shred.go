@@ -3,6 +3,7 @@ package shred
 
 import (
 	"crypto/rand"
+	mathrand "math/rand"
 	"os"
 	"path/filepath"
 	"sync"
@@ -29,6 +30,7 @@ const (
 	NoWrite WriteOptions = 1 << iota
 	WriteZeros
 	WriteRand
+	WriteRandSecure
 )
 
 // NewShredderConf create a new shredder
@@ -103,6 +105,14 @@ func (shredderConf *ShredderConf) ShredFile(path string) error {
 		}
 	}
 
+	if shredderConf.WriteOptions&WriteRandSecure == WriteRandSecure {
+		// Write rand
+		err = shredderConf.WriteRandomSecure(path, size)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Write zeros if desired
 	if shredderConf.WriteOptions&WriteZeros == WriteZeros {
 		err = doWriteZeros(path, size)
@@ -124,6 +134,42 @@ func (shredderConf *ShredderConf) ShredFile(path string) error {
 
 // WriteRandom overwrites a File with random stuff.
 func (shredderConf *ShredderConf) WriteRandom(file string, size int64) error {
+	// Do n times. Specified in conf
+	for i := 0; i < shredderConf.Times; i++ {
+		// Open file
+		f, err := os.OpenFile(file, os.O_RDWR, 0)
+		if err != nil {
+			return err
+		}
+
+		// Seek to start
+		offset, err := f.Seek(0, 0)
+		if err != nil {
+			return err
+		}
+
+		// Read random
+		buff := make([]byte, size)
+		_, err = mathrand.Read(buff)
+		if err != nil {
+			return err
+		}
+
+		// Write random
+		_, err = f.WriteAt(buff, offset)
+		if err != nil {
+			return err
+		}
+
+		// Close file
+		f.Close()
+	}
+
+	return nil
+}
+
+// WriteRandomSecure overwrites a File with random stuff.
+func (shredderConf *ShredderConf) WriteRandomSecure(file string, size int64) error {
 	// Do n times. Specified in conf
 	for i := 0; i < shredderConf.Times; i++ {
 		// Open file
