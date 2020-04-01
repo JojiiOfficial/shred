@@ -41,16 +41,16 @@ func NewShredderConf(shredder *Shredder, options WriteOptions, times int, delete
 	}
 }
 
-// Path shreds all files in the location of path
+// ShredPath shreds all files in the location of path
 // recursively. If remove is set to true files will be deleted
 // after shredding. When a file is shredded its content
 // is NOT recoverable so !!USE WITH CAUTION!!
-func (shredderConf *ShredderConf) Path(path string) error {
+func (shredderConf *ShredderConf) ShredPath(path string) error {
 	stats, err := os.Stat(path)
 	if err != nil {
 		return err
 	} else if stats.IsDir() {
-		err := shredderConf.Dir(path)
+		err := shredderConf.ShredDir(path)
 		if err != nil {
 			return err
 		}
@@ -63,8 +63,8 @@ func (shredderConf *ShredderConf) Path(path string) error {
 	return nil
 }
 
-// Dir overwrites every File in the location of path and everything in its subdirectories
-func (shredderConf *ShredderConf) Dir(path string) error {
+// ShredDir overwrites every File in the location of path and everything in its subdirectories
+func (shredderConf *ShredderConf) ShredDir(path string) error {
 	// For each file
 	err := filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
 		if err != nil {

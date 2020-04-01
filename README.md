@@ -9,7 +9,9 @@ import (
 )
 
 func main(){
-	shredconf := shred.Conf{Times: 1, Zeros: true, Remove: false}
-	shredconf.Path("filename")
+	shredder := shred.Shredder{}
+	shredconf := shred.NewShredderConf(&shredder, shred.WriteRand|shred.WriteZeros, 1, false)
+	shredconf.ShredFile("./10k")
+	shredconf.ShredDir("./toShredDir")
 }
 ```
