@@ -2,11 +2,13 @@
 package shred
 
 import (
-	"crypto/rand"
+	crand "crypto/rand"
+	"io"
 	mathrand "math/rand"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // Shredder a shredder
@@ -16,10 +18,11 @@ type Shredder struct {
 
 // ShredderConf is a object containing all choices of the user
 type ShredderConf struct {
-	Shredder     *Shredder
-	WriteOptions WriteOptions
-	Times        int
-	Delete       bool
+	Shredder            *Shredder
+	WriteOptions        WriteOptions
+	Times               int
+	Delete              bool
+	WriteRandBufferSize int
 }
 
 // WriteOptions options how to shred
@@ -33,13 +36,18 @@ const (
 	WriteRandSecure
 )
 
+// DefaultBufferSize the default buffersize used for writing
+// operations
+const DefaultBufferSize = 10 * 1024
+
 // NewShredderConf create a new shredder
 func NewShredderConf(shredder *Shredder, options WriteOptions, times int, delete bool) *ShredderConf {
 	return &ShredderConf{
-		Shredder:     shredder,
-		WriteOptions: options,
-		Times:        times,
-		Delete:       delete,
+		Shredder:            shredder,
+		WriteOptions:        options,
+		Times:               times,
+		Delete:              delete,
+		WriteRandBufferSize: DefaultBufferSize,
 	}
 }
 
@@ -99,7 +107,7 @@ func (shredderConf *ShredderConf) ShredFile(path string) error {
 
 	if shredderConf.WriteOptions&WriteRand == WriteRand {
 		// Write rand
-		err = shredderConf.WriteRandom(path, size)
+		err = shredderConf.WriteRandom(path, size, false)
 		if err != nil {
 			return err
 		}
@@ -107,7 +115,7 @@ func (shredderConf *ShredderConf) ShredFile(path string) error {
 
 	if shredderConf.WriteOptions&WriteRandSecure == WriteRandSecure {
 		// Write rand
-		err = shredderConf.WriteRandomSecure(path, size)
+		err = shredderConf.WriteRandom(path, size, true)
 		if err != nil {
 			return err
 		}
@@ -133,68 +141,70 @@ func (shredderConf *ShredderConf) ShredFile(path string) error {
 }
 
 // WriteRandom overwrites a File with random stuff.
-func (shredderConf *ShredderConf) WriteRandom(file string, size int64) error {
+func (shredderConf *ShredderConf) WriteRandom(file string, size int64, secure bool) error {
 	// Do n times. Specified in conf
-	for i := 0; i < shredderConf.Times; i++ {
-		// Open file
-		f, err := os.OpenFile(file, os.O_RDWR, 0)
-		if err != nil {
-			return err
-		}
+	buff := make([]byte, shredderConf.WriteRandBufferSize)
 
-		// Seek to start
-		offset, err := f.Seek(0, 0)
-		if err != nil {
-			return err
-		}
+	var wrCounter int
+	var o int64
+	var b bool
+	var n int
+	var f *os.File
 
-		// Read random
-		buff := make([]byte, size)
-		_, err = mathrand.Read(buff)
-		if err != nil {
-			return err
-		}
-
-		// Write random
-		_, err = f.WriteAt(buff, offset)
-		if err != nil {
-			return err
-		}
-
-		// Close file
-		f.Close()
+	fs, err := os.Stat(file)
+	if err != nil {
+		return err
 	}
 
-	return nil
-}
+	var r io.Reader
+	if !secure {
+		r = mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
+	}
 
-// WriteRandomSecure overwrites a File with random stuff.
-func (shredderConf *ShredderConf) WriteRandomSecure(file string, size int64) error {
-	// Do n times. Specified in conf
 	for i := 0; i < shredderConf.Times; i++ {
 		// Open file
-		f, err := os.OpenFile(file, os.O_RDWR, 0)
+		f, err = os.OpenFile(file, os.O_RDWR, 0)
 		if err != nil {
 			return err
 		}
+		o = int64(shredderConf.WriteRandBufferSize)
 
-		// Seek to start
-		offset, err := f.Seek(0, 0)
-		if err != nil {
-			return err
-		}
+		for {
+			// Current offset to start write call from
+			offs := int64(wrCounter * shredderConf.WriteRandBufferSize)
+			if offs > fs.Size() {
+				break
+			}
 
-		// Read random
-		buff := make([]byte, size)
-		_, err = rand.Read(buff)
-		if err != nil {
-			return err
-		}
+			// If end of write overflows the filesize
+			// Use the end of file as end to read
+			if offs+int64(shredderConf.WriteRandBufferSize) > fs.Size() {
+				o = fs.Size() - offs
+				b = true
+			}
 
-		// Write random
-		_, err = f.WriteAt(buff, offset)
-		if err != nil {
-			return err
+			// Read from proper source
+			if secure {
+				n, err = crand.Read(buff[:o])
+			} else {
+				n, err = r.Read(buff[:o])
+			}
+
+			if err != nil {
+				return err
+			}
+
+			// Write at offset n bytes
+			_, err = f.WriteAt(buff[:n], offs)
+			if err != nil {
+				return err
+			}
+
+			if b {
+				break
+			}
+
+			wrCounter++
 		}
 
 		// Close file
