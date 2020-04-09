@@ -6,7 +6,7 @@ import (
 
 func TestShredder(t *testing.T) {
 	shredder := Shredder{}
-	shredderConfg := NewShredderConf(&shredder, WriteRand|WriteRandSecure, 10, false)
+	shredderConfg := NewShredderConf(&shredder, WriteZeros, 1, false)
 	err := shredderConfg.ShredFile("./toShredder")
 	if err != nil {
 		t.Errorf("shredder error: %s", err)

@@ -98,24 +98,17 @@ func (shredderConf *ShredderConf) ShredDir(path string) error {
 
 // ShredFile overwrites a given ShredFile in the location of path
 func (shredderConf *ShredderConf) ShredFile(path string) error {
-	// Get fileinfo
-	fileinfo, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	size := fileinfo.Size()
-
+	// Write rand
 	if shredderConf.WriteOptions&WriteRand == WriteRand {
-		// Write rand
-		err = shredderConf.WriteRandom(path, size, false)
+		err := shredderConf.WriteRandom(path, false)
 		if err != nil {
 			return err
 		}
 	}
 
+	// Write rand secure (using crypto/rand)
 	if shredderConf.WriteOptions&WriteRandSecure == WriteRandSecure {
-		// Write rand
-		err = shredderConf.WriteRandom(path, size, true)
+		err := shredderConf.WriteRandom(path, true)
 		if err != nil {
 			return err
 		}
@@ -123,7 +116,7 @@ func (shredderConf *ShredderConf) ShredFile(path string) error {
 
 	// Write zeros if desired
 	if shredderConf.WriteOptions&WriteZeros == WriteZeros {
-		err = doWriteZeros(path, size)
+		err := shredderConf.DoWriteZeros(path)
 		if err != nil {
 			return err
 		}
@@ -141,96 +134,114 @@ func (shredderConf *ShredderConf) ShredFile(path string) error {
 }
 
 // WriteRandom overwrites a File with random stuff.
-func (shredderConf *ShredderConf) WriteRandom(file string, size int64, secure bool) error {
+// If secure is true, crypto/rand is used, otherwise math/rand
+func (shredderConf *ShredderConf) WriteRandom(file string, secure bool) error {
 	// Do n times. Specified in conf
 	buff := make([]byte, shredderConf.WriteRandBufferSize)
 
-	var wrCounter int
-	var o int64
-	var b bool
-	var n int
-	var f *os.File
-
-	fs, err := os.Stat(file)
-	if err != nil {
-		return err
-	}
-
 	var r io.Reader
-	if !secure {
+	if secure {
+		r = crand.Reader
+	} else {
 		r = mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
 	}
 
+	var err error
+	var f *os.File
+
+	// Overwrite file shredderConf.Times times
 	for i := 0; i < shredderConf.Times; i++ {
-		// Open file
-		f, err = os.OpenFile(file, os.O_RDWR, 0)
-		if err != nil {
-			return err
-		}
-		o = int64(shredderConf.WriteRandBufferSize)
-
-		for {
-			// Current offset to start write call from
-			offs := int64(wrCounter * shredderConf.WriteRandBufferSize)
-			if offs > fs.Size() {
-				break
-			}
-
-			// If end of write overflows the filesize
-			// Use the end of file as end to read
-			if offs+int64(shredderConf.WriteRandBufferSize) > fs.Size() {
-				o = fs.Size() - offs
-				b = true
-			}
-
-			// Read from proper source
-			if secure {
-				n, err = crand.Read(buff[:o])
-			} else {
-				n, err = r.Read(buff[:o])
-			}
-
-			if err != nil {
-				return err
-			}
-
-			// Write at offset n bytes
-			_, err = f.WriteAt(buff[:n], offs)
-			if err != nil {
-				return err
-			}
-
-			if b {
-				break
-			}
-
-			wrCounter++
-		}
-
-		// Close file
+		f, err = shredderConf.OverwriteFile(file, r, buff)
 		f.Close()
+		if err != nil {
+			break
+		}
 	}
 
-	return nil
+	return err
 }
 
-func doWriteZeros(path string, size int64) error {
-	// Open file
-	file, err := os.OpenFile(path, os.O_RDWR, 0)
+// OverwriteFile opens and overwrites a files ONCE by reading from r
+// returned file must be closed
+func (shredderConf *ShredderConf) OverwriteFile(file string, r io.Reader, buff []byte) (*os.File, error) {
+	var wrCounter int
+	var b bool
+	var n int
+	var err error
+	var f *os.File
+
+	// Opens a file Write mode only
+	// reading is not necessary
+	f, err = os.OpenFile(file, os.O_WRONLY, 0)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	// Goto 0
-	offset, err := file.Seek(0, 0)
+	// Retrieve fileinfo to get the filesize
+	fs, err := f.Stat()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	// Create zeroed buffer and write it
-	buff := make([]byte, size)
-	_, err = file.WriteAt(buff, offset)
+	readLen := int64(shredderConf.WriteRandBufferSize)
 
-	file.Close()
+	for {
+		// Current offset to start write call from
+		offs := int64(wrCounter * shredderConf.WriteRandBufferSize)
+		if offs > fs.Size() {
+			break
+		}
+
+		// If end of write overflows the filesize
+		// Use the end of file as end to read
+		if offs+int64(shredderConf.WriteRandBufferSize) > fs.Size() {
+			readLen = fs.Size() - offs
+			b = true
+		}
+
+		n, err = r.Read(buff[:readLen])
+		if err != nil {
+			return nil, err
+		}
+
+		// Write at offset n bytes
+		_, err = f.WriteAt(buff[:n], offs)
+		if err != nil {
+			return nil, err
+		}
+
+		if b {
+			break
+		}
+
+		wrCounter++
+	}
+
+	return f, nil
+}
+
+// DoWriteZeros overwrite file with zeros
+func (shredderConf *ShredderConf) DoWriteZeros(file string) error {
+	buff := make([]byte, shredderConf.WriteRandBufferSize)
+	r := ZeroReader{}
+	f, err := shredderConf.OverwriteFile(file, r, buff)
+	defer f.Close()
+
 	return err
+}
+
+// ZeroReader struct implementing the io.Reader interface
+// used to overwrite files with zeros
+type ZeroReader struct{}
+
+func (z ZeroReader) Read(b []byte) (int, error) {
+	memset(b, 0)
+	return len(b), nil
+}
+
+// Sets all indexes of b to val
+func memset(b []byte, val byte) {
+	for i := range b {
+		b[i] = val
+	}
 }
